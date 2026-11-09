@@ -15,7 +15,7 @@ async function connectToRabbitMQ() {
     logger.info("Connected to rabbit mq");
     return channel;
   } catch (e) {
-    logger.error("Error connecting to rabbit mq", e);
+    logger.error("Error connecting to rabbitmq", e);
   }
 }
 

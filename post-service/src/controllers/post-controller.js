@@ -3,13 +3,33 @@ const logger = require("../utils/logger");
 const { publishEvent } = require("../utils/rabbitmq");
 const { validateCreatePost } = require("../utils/validation");
 
+/*
 async function invalidatePostCache(req, input) {
   const cachedKey = `post:${input}`;
   await req.redisClient.del(cachedKey);
 
-  const keys = await req.redisClient.keys("posts:*");
+  const keys = [];
+
+  for await (const key of req.redisClient.scanIterator({
+    MATCH: "posts:*",
+    COUNT: 100,
+  })) {
+    keys.push(key);
+  }
+
   if (keys.length > 0) {
     await req.redisClient.del(keys);
+  }
+}
+*/
+
+async function invalidatePostCache(req, postId) {
+  // Increment the global posts cache version
+  await req.redisClient.incr("posts:version");
+
+  // Invalidate the individual post cache
+  if (postId) {
+    await req.redisClient.del(`post:${postId}`);
   }
 }
 
@@ -47,7 +67,7 @@ const createPost = async (req, res) => {
       success: true,
       message: "Post created successfully",
     });
-  } catch (e) {
+  } catch (error) {
     logger.error("Error creating post", error);
     res.status(500).json({
       success: false,
@@ -62,7 +82,17 @@ const getAllPosts = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const startIndex = (page - 1) * limit;
 
-    const cacheKey = `posts:${page}:${limit}`;
+    // Initialize the version key if it doesn't exist
+    await req.redisClient.set(
+      "posts:version",
+      "1",
+      { NX: true } // NX means set the value only if the key doesn't already exist
+    );
+
+    // Retrieve the current cache version
+    const version = await req.redisClient.get("posts:version");
+
+    const cacheKey = `posts:v${version}:${page}:${limit}`;
     const cachedPosts = await req.redisClient.get(cacheKey);
 
     if (cachedPosts) {
@@ -87,7 +117,7 @@ const getAllPosts = async (req, res) => {
     await req.redisClient.setex(cacheKey, 300, JSON.stringify(result));
 
     res.json(result);
-  } catch (e) {
+  } catch (error) {
     logger.error("Error fetching posts", error);
     res.status(500).json({
       success: false,
@@ -116,13 +146,13 @@ const getPost = async (req, res) => {
     }
 
     await req.redisClient.setex(
-      cachedPost,
+      cachekey,
       3600,
       JSON.stringify(singlePostDetailsbyId)
     );
 
     res.json(singlePostDetailsbyId);
-  } catch (e) {
+  } catch (error) {
     logger.error("Error fetching post", error);
     res.status(500).json({
       success: false,
@@ -156,7 +186,7 @@ const deletePost = async (req, res) => {
     res.json({
       message: "Post deleted successfully",
     });
-  } catch (e) {
+  } catch (error) {
     logger.error("Error deleting post", error);
     res.status(500).json({
       success: false,
